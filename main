@@ -27,7 +27,7 @@ class IntroScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                'Welcome to Label the Face!',
+                'Welcome to Label the Bone!',
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               SizedBox(height: 20),
@@ -55,7 +55,7 @@ class GameScreen extends StatefulWidget {
 
 class _GameScreenState extends State<GameScreen> {
   final TextEditingController _controller = TextEditingController();
-  final String correctAnswer = 'eye'; // You can change this
+  final String correctAnswer = 'humerus'; // You can change this
   String feedback = '';
 
   void _checkAnswer() {
@@ -80,9 +80,8 @@ class _GameScreenState extends State<GameScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Expanded(
-              child: Image.asset('assets/images/face_with_arrow.png'),
-            ),
+            Expanded(child: Image.network('https://prod-images-static.radiopaedia.org/images/15727886/f8709f67e11a95e6387867d0f1f667.png')
+              ),
             TextField(
               controller: _controller,
               decoration: InputDecoration(
