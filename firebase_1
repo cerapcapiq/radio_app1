@@ -1,0 +1,413 @@
+import 'package:flutter/material.dart';
+import 'dart:math';
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    await FirebaseAuth.instance.signInAnonymously();
+    print('Firebase initialized successfully');
+    runApp(LabelTheBoneApp());
+  } catch (e) {
+    print('Firebase initialization error: $e');
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Text('Failed to initialize Firebase: $e'),
+        ),
+      ),
+    ));
+  }
+}
+
+class LabelTheBoneApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'BeeRad',
+      theme: ThemeData.dark(),
+      darkTheme: ThemeData.dark(),
+      themeMode: ThemeMode.dark,
+      home: IntroScreen(),
+    );
+  }
+}
+
+class IntroScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset('assets/image/beerad_logo.png',
+              width: 220,
+              errorBuilder: (context, error, stackTrace) => FlutterLogo(size: 220),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'Welcome to BeeRad',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => GameScreen()),
+                );
+              },
+              child: Text('Start Game'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class Question {
+  final String imageUrl;
+  final String answer;
+  final List<String> alternativeAnswers;
+
+  Question({
+    required this.imageUrl,
+    required this.answer,
+    this.alternativeAnswers = const [],
+  });
+}
+
+class GameScreen extends StatefulWidget {
+  @override
+  _GameScreenState createState() => _GameScreenState();
+}
+
+class _GameScreenState extends State<GameScreen> {
+  File? _pickedImage;
+  final TextEditingController _controller = TextEditingController();
+  final TextEditingController _answerController = TextEditingController();
+  final List<Question> questions = [
+    Question(
+      imageUrl: 'https://prod-images-static.radiopaedia.org/images/15727886/f8709f67e11a95e6387867d0f1f667.png',
+      answer: 'humerus',
+      alternativeAnswers: ['the humerus', 'humerus bone'],
+    ),
+    Question(
+      imageUrl: 'https://prod-images-static.radiopaedia.org/images/59335143/01e8913b5a0e873096af960f60af5f8dcb315ffb1a11901d32b98b5cb77f5103_big_gallery.jpeg',
+      answer: 'skull',
+      alternativeAnswers: ['the skull', 'cranium'],
+    ),
+    Question(
+      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Mandible_bone.png/800px-Mandible_bone.png',
+      answer: 'mandible',
+      alternativeAnswers: ['the mandible', 'jawbone'],
+    ),
+  ];
+
+  int currentIndex = 0;
+  int score = 0;
+  bool showCorrectAnswer = false;
+
+  @override
+  void initState() {
+    super.initState();
+    questions.shuffle(Random());
+  }
+
+  bool _isAnswerCorrect(String userAnswer) {
+    final currentQuestion = questions[currentIndex];
+    final possibleAnswers = [
+      currentQuestion.answer,
+      ...currentQuestion.alternativeAnswers
+    ].map((a) => a.toLowerCase().trim()).toList();
+
+    return possibleAnswers.contains(userAnswer.toLowerCase().trim());
+  }
+
+  void _checkAnswer() {
+    final userAnswer = _controller.text.trim();
+    if (userAnswer.isEmpty) return;
+
+    if (_isAnswerCorrect(userAnswer)) {
+      setState(() {
+        score++;
+        showCorrectAnswer = false;
+        _moveToNextQuestion();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Correct! Score: $score')),
+      );
+    } else {
+      setState(() => showCorrectAnswer = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Try again!')),
+      );
+    }
+
+    _controller.clear();
+  }
+
+  void _moveToNextQuestion() {
+    if (currentIndex < questions.length - 1) {
+      setState(() => currentIndex++);
+    } else {
+      _showEndDialog();
+    }
+  }
+
+  void _skipQuestion() {
+    setState(() {
+      showCorrectAnswer = false;
+      _moveToNextQuestion();
+    });
+    _controller.clear();
+  }
+
+  void _showEndDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Game Completed!'),
+        content: Text('Your final score is $score/${questions.length}.\nRestart the game?'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              setState(() {
+                currentIndex = 0;
+                score = 0;
+                questions.shuffle(Random());
+              });
+            },
+            child: Text('Restart'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _uploadCustomQuestion() async {
+    try {
+      final picker = ImagePicker();
+      final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
+      if (pickedFile == null) return;
+
+      setState(() => _pickedImage = File(pickedFile.path));
+
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(child: CircularProgressIndicator()),
+      );
+
+      try {
+        final fileName = 'custom_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final ref = FirebaseStorage.instance.ref().child('custom_questions/$fileName');
+        await ref.putFile(_pickedImage!);
+        final url = await ref.getDownloadURL();
+        print('Upload done,. URL $url');
+        await ref.putFile(_pickedImage!).catchError((e) {
+          ("upload failed: $e");
+        });
+
+        // Close loading dialog
+        Navigator.of(context).pop();
+
+        // Show answer input dialog
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('Set the Answer'),
+            content: TextField(
+              controller: _answerController,
+              decoration: InputDecoration(labelText: 'Correct answer for this image'),
+              autofocus: true,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  final answer = _answerController.text.trim();
+                  if (answer.isNotEmpty) {
+                    setState(() {
+                      questions.add(Question(
+                        imageUrl: url,
+                        answer: answer,
+                        alternativeAnswers: [],
+                      ));
+                    });
+                    _answerController.clear();
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Custom question added!')),
+                    );
+                  }
+                },
+                child: Text('Add'),
+              ),
+            ],
+          ),
+        );
+      } catch (e) {
+        Navigator.of(context).pop(); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: ${e.toString()}')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error picking image: ${e.toString()}')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _answerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentQuestion = questions[currentIndex];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Label the Bone'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.add_photo_alternate),
+            tooltip: 'Add Custom Question',
+            onPressed: _uploadCustomQuestion,
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            LinearProgressIndicator(
+              value: (currentIndex + 1) / questions.length,
+            ),
+            SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Question ${currentIndex + 1} of ${questions.length}',
+                  style: TextStyle(fontSize: 18),
+                ),
+                Text(
+                  'Score: $score',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            SizedBox(height: 20),
+            Expanded(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Image.network(
+                    currentQuestion.imageUrl,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Center(
+                        child: CircularProgressIndicator(
+                          value: loadingProgress.expectedTotalBytes != null
+                              ? loadingProgress.cumulativeBytesLoaded /
+                              loadingProgress.expectedTotalBytes!
+                              : null,
+                        ),
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) => Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error, color: Colors.red),
+                        Text('Failed to load image'),
+                      ],
+                    ),
+                  ),
+                  if (showCorrectAnswer)
+                    Positioned(
+                      bottom: 10,
+                      child: Container(
+                        padding: EdgeInsets.all(8),
+                        color: Colors.black54,
+                        child: Text(
+                          'Answer: ${currentQuestion.answer}',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            SizedBox(height: 20),
+            TextField(
+              controller: _controller,
+              decoration: InputDecoration(
+                labelText: 'Enter the bone name',
+                border: OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(Icons.send),
+                  onPressed: _checkAnswer,
+                ),
+              ),
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _checkAnswer(),
+            ),
+            SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _checkAnswer,
+                    child: Text('Submit'),
+                    style: ElevatedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(vertical: 15),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _skipQuestion,
+                    child: Text('Skip'),
+                    style: OutlinedButton.styleFrom(
+                      padding: EdgeInsets.symmetric(vertical: 15),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
