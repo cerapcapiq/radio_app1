@@ -1,0 +1,350 @@
+import 'package:flutter/material.dart';
+import 'dart:math';
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    await FirebaseAuth.instance.signInAnonymously();
+    print('Firebase initialized successfully');
+    runApp(LabelTheBoneApp());
+  } catch (e) {
+    print('Firebase initialization error: \$e');
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Text('Failed to initialize Firebase'),
+        ),
+      ),
+    ));
+  }
+}
+
+class LabelTheBoneApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'BeeRad',
+      theme: ThemeData.dark(),
+      darkTheme: ThemeData.dark(),
+      themeMode: ThemeMode.dark,
+      home: IntroScreen(),
+    );
+  }
+}
+
+enum Difficulty { beginner, medium, hard }
+
+class IntroScreen extends StatefulWidget {
+  @override
+  _IntroScreenState createState() => _IntroScreenState();
+}
+
+class _IntroScreenState extends State<IntroScreen> {
+  Difficulty _selectedDifficulty = Difficulty.beginner;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset('assets/image/beerad_logo.png', width: 220),
+            SizedBox(height: 20),
+            Text(
+              'Welcome to BeeRad',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => DifficultyScreen(selectedDifficulty: _selectedDifficulty),
+                  ),
+                );
+              },
+              child: Text('Start Game'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DifficultyScreen extends StatelessWidget {
+  final Difficulty selectedDifficulty;
+
+  DifficultyScreen({required this.selectedDifficulty});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Select Difficulty')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('Choose Difficulty', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => GameScreen(difficulty: Difficulty.beginner)),
+                );
+              },
+              child: Text('Beginner'),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => GameScreen(difficulty: Difficulty.hard)),
+                );
+              },
+              child: Text('Medium'),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => GameScreen(difficulty: Difficulty.hard)),
+                );
+              },
+              child: Text('Hard'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class Question {
+  final String imageUrl;
+  final String answer;
+  final List<String> alternativeAnswers;
+  final Difficulty difficulty;
+
+  Question({
+    required this.imageUrl,
+    required this.answer,
+    this.alternativeAnswers = const [],
+    this.difficulty = Difficulty.beginner,
+  });
+}
+
+class GameScreen extends StatefulWidget {
+  final Difficulty difficulty;
+
+  GameScreen({required this.difficulty});
+
+  @override
+  _GameScreenState createState() => _GameScreenState();
+}
+
+class _GameScreenState extends State<GameScreen> {
+  File? _pickedImage;
+  final TextEditingController _controller = TextEditingController();
+  final TextEditingController _answerController = TextEditingController();
+
+  List<Question> allQuestions = [
+    Question(
+      imageUrl: 'https://prod-images-static.radiopaedia.org/images/15727886/f8709f67e11a95e6387867d0f1f667.png',
+      answer: 'humerus',
+      alternativeAnswers: ['the humerus', 'humerus bone'],
+      difficulty: Difficulty.beginner,
+    ),
+    Question(
+      imageUrl: 'assets/image/skull.png',
+      answer: 'skull',
+      alternativeAnswers: ['the skull', 'cranium'],
+      difficulty: Difficulty.medium,
+    ),
+    Question(
+      imageUrl: 'assets/image/mandible.jpeg',
+      answer: 'mandible',
+      alternativeAnswers: ['the mandible', 'jawbone'],
+      difficulty: Difficulty.hard,
+    ),
+  ];
+
+  String _formatDifficulty(Difficulty difficulty) {
+    switch (difficulty) {
+      case Difficulty.beginner:
+        return 'Beginner';
+      case Difficulty.medium:
+        return 'Medium';
+      case Difficulty.hard:
+        return 'Hard';
+    }
+  }
+
+
+  late List<Question> _questions;
+  int _currentQuestionIndex = 0;
+  int score = 0;
+  String _userAnswer = '';
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _questions = allQuestions.where((q) => q.difficulty == widget.difficulty).toList();
+  }
+
+  void _checkAnswer() {
+    final current = _questions[_currentQuestionIndex];
+    final input = _userAnswer.trim().toLowerCase();
+
+    final isCorrect = input == current.answer.toLowerCase() ||
+        current.alternativeAnswers.any((alt) => alt.toLowerCase() == input);
+
+    if (isCorrect) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Correct!')));
+      setState(() {
+        score++;
+        _currentQuestionIndex++;
+        _userAnswer = '';
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Try again.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_currentQuestionIndex >= _questions.length) {
+      return Scaffold(
+        body: Center(child: Text('Game Over! Your score: $score')),
+      );
+      void _showScoreDialog() {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: Text('Game Over'),
+            content: Text('Your score: $score / ${_questions.length}'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop(); // Close dialog
+                  setState(() {
+                    _currentQuestionIndex = 0; // Reset the game
+                    score = 0; // Reset score
+                    _userAnswer = ''; // Reset the answer field
+                  });
+                },
+                child: Text('Play Again'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop(); // Close dialog
+                  Navigator.of(context).pop(); // Go back to IntroScreen
+                },
+                child: Text('Quit'),
+              ),
+            ],
+          ),
+        );
+      }
+
+      @override
+      Widget build(BuildContext context) {
+        if (_isLoading) {
+          return Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // Check if all questions are answered
+        if (_currentQuestionIndex >= _questions.length) {
+          // Show score dialog after the last question
+          _showScoreDialog();
+          return SizedBox(); // Empty widget while dialog is shown
+        }
+
+        final question = _questions[_currentQuestionIndex];
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text('Difficulty: ${_formatDifficulty(widget.difficulty)}'),
+          ),
+          body: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              children: [
+                question.imageUrl.startsWith('http')
+                    ? Image.network(question.imageUrl, height: 250)
+                    : Image.asset(question.imageUrl, height: 250, errorBuilder: (_, __, ___) => FlutterLogo(size: 250)),
+                SizedBox(height: 20),
+                Text('What bone is this?', style: TextStyle(fontSize: 22)),
+                TextField(
+                  onChanged: (value) => _userAnswer = value,
+                  onSubmitted: (_) => _checkAnswer(),
+                  decoration: InputDecoration(labelText: 'Type your answer'),
+                ),
+                SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: _checkAnswer,
+                  child: Text('Submit'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+    }
+
+    final question = _questions[_currentQuestionIndex];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Difficulty: ${_formatDifficulty(widget.difficulty)}'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            question.imageUrl.startsWith('http')
+                ? Image.network(question.imageUrl, height: 250)
+                : Image.asset(question.imageUrl, height: 250, errorBuilder: (_, __, ___) => FlutterLogo(size: 250)),
+            SizedBox(height: 20),
+            Text('What bone is this?', style: TextStyle(fontSize: 22)),
+            TextField(
+              onChanged: (value) => _userAnswer = value,
+              onSubmitted: (_) => _checkAnswer(),
+              decoration: InputDecoration(labelText: 'Type your answer'),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _checkAnswer,
+              child: Text('Submit'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
